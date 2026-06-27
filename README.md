@@ -34,9 +34,9 @@ every poll_interval seconds:
         silence_count = 0
 ```
 
-The grace period (EXTINCTION_GRACE_TICKS) prevents false positives during the
+The grace period (`EXTINCTION_GRACE_TICKS`) prevents false positives during the
 brief moment between one generation's deaths and the next generation's births.
-Set it to at least 2 × tick_interval to be safe.
+Set it to at least `2 × tick_interval` to be safe.
 
 ## Deployment order
 
