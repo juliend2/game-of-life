@@ -45,7 +45,6 @@ stop:
 	@# kill all cells:
 	kubectl delete jobs -n gol -l app=gol-agent
 
-
 pause:
 	kubectl scale deployment/perceiver -n gol --replicas=0
 	kubectl delete jobs -n gol -l app=gol-agent
@@ -53,3 +52,5 @@ pause:
 unpause:
 	kubectl scale deployment/perceiver -n gol --replicas=1
 
+play:
+	watch -n 5 'curl -s http://localhost:30080/grid'
