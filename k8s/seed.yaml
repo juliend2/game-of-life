@@ -32,7 +32,7 @@ spec:
         - name: seeder
           # Whewn I'll have my cluster running on other machines, my registry
           # will live elsewhere, so modify this line:
-          # image: your-registry/gol-perceiver:latest
+          # image: your-registry/gol-agent:latest
           #
           # But for now, use this for local development only:
           image: localhost:5000/gol-agent:latest
@@ -110,7 +110,7 @@ data:
             - name: agent
               # Whewn I'll have my cluster running on other machines, my registry
               # will live elsewhere, so modify this line:
-              # image: your-registry/gol-perceiver:latest
+              # image: your-registry/gol-agent:latest
               #
               # But for now, use this for local development only:
               image: localhost:5000/gol-agent:latest

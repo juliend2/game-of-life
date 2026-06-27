@@ -25,7 +25,7 @@ spec:
           # image: your-registry/gol-perceiver:latest
           #
           # But for now, use this for local development only:
-          image: localhost:5000/gol-agent:latest
+          image: localhost:5000/gol-perceiver:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
