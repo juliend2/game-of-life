@@ -39,4 +39,17 @@ deploy: docker push
 	kubectl rollout status deployment/perceiver -n gol --timeout=60s
 	kubectl delete jobs -n gol -l app=gol-agent
 
+stop:
+	@# stop re-seeding:
+	kubectl scale deployment/perceiver -n gol --replicas=0
+	@# kill all cells:
+	kubectl delete jobs -n gol -l app=gol-agent
+
+
+pause:
+	kubectl scale deployment/perceiver -n gol --replicas=0
+	kubectl delete jobs -n gol -l app=gol-agent
+
+unpause:
+	kubectl scale deployment/perceiver -n gol --replicas=1
 
