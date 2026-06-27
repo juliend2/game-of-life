@@ -5,9 +5,8 @@
 when you make a change, do this to build the image and push it, and deploy it:
 
 ```bash
-make docker push
-kubectl rollout restart deployment/perceiver -n gol
-kubectl delete jobs -n gol -l app=gol-agent
+# make your changes
+make deploy # will build and push the image, and restart the jobs
 ```
 
 ## Watch the game
