@@ -1,0 +1,136 @@
+---
+# The seed Job runs once at the start of the simulation.
+# It creates the initial set of agent Jobs (one per living cell)
+# for a classic GoL glider pattern centered on the grid.
+#
+# A glider looks like this (. = dead, O = alive):
+#
+#   . O .
+#   . . O
+#   O O O
+#
+# Coordinates for a 20x20 grid, centered around (10,10):
+#   (10, 9), (11, 10), (9, 11), (10, 11), (11, 11)
+#
+# The seeder creates one agent Job per cell above, then exits.
+# From that point on, the agents manage their own lifecycle.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gol-seed
+  namespace: gol
+spec:
+  # Never retry the seeder if it fails — fix the issue and re-apply.
+  backoffLimit: 0
+  # Clean up the completed seed Job after 60 seconds.
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      serviceAccountName: gol-agent
+      restartPolicy: Never
+      containers:
+        - name: seeder
+          image: your-registry/gol-agent:latest
+          imagePullPolicy: Always
+          # The agent image doubles as the seeder when SEED_MODE=true.
+          # In seed mode it creates the initial Jobs and exits immediately.
+          env:
+            - name: SEED_MODE
+              value: "true"
+            - name: REDIS_ADDR
+              value: "redis:6379"
+            - name: GRID_WIDTH
+              valueFrom:
+                configMapKeyRef:
+                  name: gol-config
+                  key: grid_width
+            - name: GRID_HEIGHT
+              valueFrom:
+                configMapKeyRef:
+                  name: gol-config
+                  key: grid_height
+            - name: TICK_INTERVAL
+              valueFrom:
+                configMapKeyRef:
+                  name: gol-config
+                  key: tick_interval
+            # Comma-separated list of x,y pairs to seed.
+            # This is the glider pattern — edit freely.
+            - name: SEED_CELLS
+              value: "10,9;11,10;9,11;10,11;11,11"
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "25m"
+            limits:
+              memory: "32Mi"
+              cpu: "100m"
+
+---
+# This is the template that the agent (and the seeder) use
+# when spawning a new cell Job. It is stored as a ConfigMap
+# so the Go code can read it and fill in the x,y coordinates
+# without hardcoding YAML inside the binary.
+#
+# The agent reads this template, substitutes {{X}} and {{Y}},
+# and POSTs it to the Kubernetes API.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gol-job-template
+  namespace: gol
+data:
+  job.yaml: |
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: gol-cell-{{X}}-{{Y}}
+      namespace: gol
+      labels:
+        app: gol-agent
+        gol-x: "{{X}}"
+        gol-y: "{{Y}}"
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: gol-agent
+            gol-x: "{{X}}"
+            gol-y: "{{Y}}"
+        spec:
+          serviceAccountName: gol-agent
+          restartPolicy: Never
+          containers:
+            - name: agent
+              image: your-registry/gol-agent:latest
+              imagePullPolicy: Always
+              env:
+                - name: CELL_X
+                  value: "{{X}}"
+                - name: CELL_Y
+                  value: "{{Y}}"
+                - name: REDIS_ADDR
+                  value: "redis:6379"
+                - name: GRID_WIDTH
+                  valueFrom:
+                    configMapKeyRef:
+                      name: gol-config
+                      key: grid_width
+                - name: GRID_HEIGHT
+                  valueFrom:
+                    configMapKeyRef:
+                      name: gol-config
+                      key: grid_height
+                - name: TICK_INTERVAL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: gol-config
+                      key: tick_interval
+              resources:
+                requests:
+                  memory: "16Mi"
+                  cpu: "10m"
+                limits:
+                  memory: "32Mi"
+                  cpu: "100m"

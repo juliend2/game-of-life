@@ -1,0 +1,16 @@
+---
+# Shared configuration for all pods in the simulation.
+# Change these values and reapply — no image rebuild needed.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gol-config
+  namespace: gol
+data:
+  grid_width: "20"
+  grid_height: "20"
+
+  # How long each agent waits between ticks (in seconds).
+  # Keep this >= 10 to give newly spawned pods time to register
+  # in Redis before their neighbors evaluate them.
+  tick_interval: "10"

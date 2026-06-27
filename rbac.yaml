@@ -1,0 +1,86 @@
+---
+# The identity that every agent pod runs as.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gol-agent
+  namespace: gol
+
+---
+# What an agent pod is allowed to do inside the gol namespace.
+#
+# Agents need to:
+#   - read Jobs and Pods  (to check if a neighbor cell already has a pod)
+#   - create Jobs         (to spawn a new cell/agent)
+#   - delete Jobs         (when a cell dies it cleans up its own Job)
+#
+# We use Jobs (not bare Pods) for cell agents so that Kubernetes does
+# not restart them when they exit — a dying cell should stay dead.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gol-agent-role
+  namespace: gol
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gol-agent-rolebinding
+  namespace: gol
+subjects:
+  - kind: ServiceAccount
+    name: gol-agent
+    namespace: gol
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: gol-agent-role
+
+---
+# The perceiver: watches the world and sustains it into existence.
+# In homage to Berkeley's God — esse est percipi — to be is to be perceived.
+# Unlike a passive observer, the perceiver acts when the world goes dark:
+# it detects extinction and re-seeds the simulation.
+# This requires write access to Jobs, not just read.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gol-perceiver
+  namespace: gol
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: gol-perceiver-role
+  namespace: gol
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gol-perceiver-rolebinding
+  namespace: gol
+subjects:
+  - kind: ServiceAccount
+    name: gol-perceiver
+    namespace: gol
+roleRef:
+  kind: Role
+  apiGroup: rbac.authorization.k8s.io
+  name: gol-perceiver-role
