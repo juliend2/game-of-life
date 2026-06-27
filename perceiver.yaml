@@ -20,7 +20,12 @@ spec:
       serviceAccountName: gol-perceiver
       containers:
         - name: perceiver
-          image: your-registry/gol-perceiver:latest
+          # Whewn I'll have my cluster running on other machines, my registry
+          # will live elsewhere, so modify this line:
+          # image: your-registry/gol-perceiver:latest
+          #
+          # But for now, use this for local development only:
+          image: localhost:5000/gol-agent:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
