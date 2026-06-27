@@ -12,13 +12,10 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/yourname/gol/internal/spawn"
 )
 
 // -- Config -------------------------------------------------------------------
@@ -57,6 +54,14 @@ func loadConfig() config {
 
 	if raw := os.Getenv("SEED_CELLS"); raw != "" {
 		cfg.seedCells = parseCells(raw)
+	}
+
+	// A tick shorter than ~10s races pod startup: a freshly spawned cell may
+	// not have registered itself in Redis yet by the time its neighbors tick.
+	if cfg.tickInterval < 10*time.Second {
+		log.Printf("WARNING: TICK_INTERVAL=%s is below the recommended 10s floor — "+
+			"newly spawned cells may not register in Redis before neighbors evaluate them",
+			cfg.tickInterval)
 	}
 
 	return cfg
@@ -188,106 +193,33 @@ func kubeClient() *kubernetes.Clientset {
 	return client
 }
 
-// jobName returns the deterministic Job name for a cell.
-// Kubernetes job names must be lowercase alphanumeric + hyphens.
-func jobName(x, y int) string {
-	return fmt.Sprintf("gol-cell-%d-%d", x, y)
+// spawnConfig translates the agent's config into the shape spawn.Cell wants.
+func (c config) spawnConfig() spawn.Config {
+	return spawn.Config{
+		Namespace:    c.namespace,
+		Image:        c.image,
+		RedisAddr:    c.redisAddr,
+		GridWidth:    c.gridWidth,
+		GridHeight:   c.gridHeight,
+		TickInterval: c.tickInterval,
+	}
 }
 
-// spawnCell creates a Kubernetes Job for a new cell at (x, y).
-// If a Job already exists there (another agent beat us to it), it does nothing.
-func spawnCell(ctx context.Context, kube *kubernetes.Clientset, cfg config, x, y int) {
-	name := jobName(x, y)
-
-	// Use SETNX on Redis as a lightweight lock to prevent two agents
-	// from spawning the same cell simultaneously.
-	// SETNX = SET if Not eXists — atomic in Redis.
-	rdb := redis.NewClient(&redis.Options{Addr: cfg.redisAddr})
-	defer rdb.Close()
-
+// trySpawn attempts a Redis SETNX lock then creates the cell Job.
+// The lock prevents two surviving neighbors from both creating the same Job
+// at the same instant; the deterministic Job name in spawn.Cell handles the
+// slower race where one caller's Get happens after the other's Create.
+func trySpawn(ctx context.Context, rdb *redis.Client, kube *kubernetes.Clientset, cfg config, x, y int) {
 	lockKey := fmt.Sprintf("spawning:%d:%d", x, y)
 	set, err := rdb.SetNX(ctx, lockKey, "1", 30*time.Second).Result()
 	if err != nil || !set {
 		log.Printf("spawn(%d,%d): lock not acquired, another agent is handling it", x, y)
 		return
 	}
-
-	// Check if the Job already exists in Kubernetes.
-	_, err = kube.BatchV1().Jobs(cfg.namespace).Get(ctx, name, metav1.GetOptions{})
-	if err == nil {
-		log.Printf("spawn(%d,%d): Job already exists", x, y)
+	if err := spawn.Cell(ctx, kube, cfg.spawnConfig(), x, y); err != nil {
+		log.Printf("spawn(%d,%d): %v", x, y, err)
 		return
 	}
-	if !errors.IsNotFound(err) {
-		log.Printf("spawn(%d,%d): kube error: %v", x, y, err)
-		return
-	}
-
-	backoffLimit := int32(0)
-	xStr := strconv.Itoa(x)
-	yStr := strconv.Itoa(y)
-
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: cfg.namespace,
-			Labels: map[string]string{
-				"app":   "gol-agent",
-				"gol-x": xStr,
-				"gol-y": yStr,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoffLimit,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app":   "gol-agent",
-						"gol-x": xStr,
-						"gol-y": yStr,
-					},
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: "gol-agent",
-					RestartPolicy:      corev1.RestartPolicyNever,
-					Containers: []corev1.Container{
-						{
-							Name:            "agent",
-							Image:           cfg.image,
-							ImagePullPolicy: corev1.PullAlways,
-							Env: []corev1.EnvVar{
-								{Name: "CELL_X", Value: xStr},
-								{Name: "CELL_Y", Value: yStr},
-								{Name: "REDIS_ADDR", Value: cfg.redisAddr},
-								{Name: "AGENT_IMAGE", Value: cfg.image},
-								{Name: "NAMESPACE", Value: cfg.namespace},
-								{Name: "GRID_WIDTH", Value: strconv.Itoa(cfg.gridWidth)},
-								{Name: "GRID_HEIGHT", Value: strconv.Itoa(cfg.gridHeight)},
-								{Name: "TICK_INTERVAL", Value: strconv.Itoa(int(cfg.tickInterval.Seconds()))},
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceMemory: mustQuantity("16Mi"),
-									corev1.ResourceCPU:    mustQuantity("10m"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceMemory: mustQuantity("32Mi"),
-									corev1.ResourceCPU:    mustQuantity("100m"),
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	_, err = kube.BatchV1().Jobs(cfg.namespace).Create(ctx, job, metav1.CreateOptions{})
-	if err != nil {
-		log.Printf("spawn(%d,%d): failed to create Job: %v", x, y, err)
-		return
-	}
-
 	log.Printf("spawn(%d,%d): Job created", x, y)
 }
 
@@ -298,8 +230,11 @@ func spawnCell(ctx context.Context, kube *kubernetes.Clientset, cfg config, x, y
 // FIXME: Isn't it the job of the Perceiver?
 func runSeed(ctx context.Context, kube *kubernetes.Clientset, rdb *redis.Client, cfg config) {
 	log.Printf("seed mode: seeding %d cells", len(cfg.seedCells))
+	// No SETNX lock needed: the seeder runs once, no other writers.
 	for _, c := range cfg.seedCells {
-		spawnCell(ctx, kube, cfg, c.x, c.y)
+		if err := spawn.Cell(ctx, kube, cfg.spawnConfig(), c.x, c.y); err != nil {
+			log.Printf("seed cell(%d,%d): %v", c.x, c.y, err)
+		}
 	}
 	log.Printf("seed mode: done")
 }
@@ -380,7 +315,7 @@ func main() {
 			}
 
 			for _, c := range result.spawn {
-				spawnCell(ctx, kube, cfg, c.x, c.y)
+				trySpawn(ctx, rdb, kube, cfg, c.x, c.y)
 			}
 		}
 	}
@@ -426,10 +361,4 @@ func parseCells(raw string) []cell {
 		cells = append(cells, cell{x, y})
 	}
 	return cells
-}
-
-// mustQuantity parses a Kubernetes resource quantity string.
-// Panics on invalid input — these are hardcoded constants, not user input.
-func mustQuantity(s string) resource.Quantity {
-	return resource.MustParse(s)
 }

@@ -16,13 +16,10 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/yourname/gol/internal/spawn"
 )
 
 // -- Config -------------------------------------------------------------------
@@ -144,83 +141,16 @@ func kubeClient() *kubernetes.Clientset {
 	return client
 }
 
-func jobName(x, y int) string {
-	return fmt.Sprintf("gol-cell-%d-%d", x, y)
-}
-
-// spawnCell creates a Kubernetes Job for a new cell at (x, y).
-func spawnCell(ctx context.Context, kube *kubernetes.Clientset, cfg config, x, y int) error {
-	name := jobName(x, y)
-
-	_, err := kube.BatchV1().Jobs(cfg.namespace).Get(ctx, name, metav1.GetOptions{})
-	if err == nil {
-		return nil // already exists
+// spawnConfig translates the perceiver's config into the shape spawn.Cell wants.
+func (c config) spawnConfig() spawn.Config {
+	return spawn.Config{
+		Namespace:    c.namespace,
+		Image:        c.agentImage,
+		RedisAddr:    c.redisAddr,
+		GridWidth:    c.gridWidth,
+		GridHeight:   c.gridHeight,
+		TickInterval: c.tickInterval,
 	}
-	if !errors.IsNotFound(err) {
-		return fmt.Errorf("kube get: %w", err)
-	}
-
-	backoffLimit := int32(0)
-	xStr := strconv.Itoa(x)
-	yStr := strconv.Itoa(y)
-
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: cfg.namespace,
-			Labels: map[string]string{
-				"app":   "gol-agent",
-				"gol-x": xStr,
-				"gol-y": yStr,
-			},
-		},
-		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoffLimit,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app":   "gol-agent",
-						"gol-x": xStr,
-						"gol-y": yStr,
-					},
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: "gol-agent",
-					RestartPolicy:      corev1.RestartPolicyNever,
-					Containers: []corev1.Container{
-						{
-							Name:            "agent",
-							Image:           cfg.agentImage,
-							ImagePullPolicy: corev1.PullAlways,
-							Env: []corev1.EnvVar{
-								{Name: "CELL_X", Value: xStr},
-								{Name: "CELL_Y", Value: yStr},
-								{Name: "REDIS_ADDR", Value: cfg.redisAddr},
-								{Name: "AGENT_IMAGE", Value: cfg.agentImage},
-								{Name: "NAMESPACE", Value: cfg.namespace},
-								{Name: "GRID_WIDTH", Value: strconv.Itoa(cfg.gridWidth)},
-								{Name: "GRID_HEIGHT", Value: strconv.Itoa(cfg.gridHeight)},
-								{Name: "TICK_INTERVAL", Value: strconv.Itoa(int(cfg.tickInterval.Seconds()))},
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse("16Mi"),
-									corev1.ResourceCPU:    resource.MustParse("10m"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse("32Mi"),
-									corev1.ResourceCPU:    resource.MustParse("100m"),
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	_, err = kube.BatchV1().Jobs(cfg.namespace).Create(ctx, job, metav1.CreateOptions{})
-	return err
 }
 
 // seed picks a random pattern and spawns all its cells.
@@ -237,7 +167,7 @@ func seed(ctx context.Context, kube *kubernetes.Clientset, world *worldState, cf
 	log.Printf("perceiver: extinction detected — seeding pattern %q (generation %d)", p.name, world.generation)
 
 	for _, c := range p.cells {
-		if err := spawnCell(ctx, kube, cfg, c.x, c.y); err != nil {
+		if err := spawn.Cell(ctx, kube, cfg.spawnConfig(), c.x, c.y); err != nil {
 			log.Printf("perceiver: failed to spawn cell(%d,%d): %v", c.x, c.y, err)
 		}
 	}

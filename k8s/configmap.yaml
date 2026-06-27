@@ -11,6 +11,9 @@ data:
   grid_height: "20"
 
   # How long each agent waits between ticks (in seconds).
-  # Keep this >= 10 to give newly spawned pods time to register
-  # in Redis before their neighbors evaluate them.
+  #
+  # CONSTRAINT: must be >= 10. The agent logs a startup warning if it isn't.
+  # A shorter interval races pod startup — a freshly spawned cell may not
+  # have registered itself in Redis yet by the time its neighbors tick and
+  # evaluate it, which causes false "dead" reads and unstable generations.
   tick_interval: "10"

@@ -1,4 +1,4 @@
-module github.com/yourname/gol/agent
+module github.com/yourname/gol
 
 go 1.22
 
